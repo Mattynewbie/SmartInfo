@@ -388,7 +388,7 @@ begin
     safe_user_id,
     now()
   )
-  on conflict (device_hash) do update set
+  on conflict on constraint device_voice_usage_pkey do update set
     device_id_source = coalesce(nullif(excluded.device_id_source, ''), device_voice_usage.device_id_source),
     last_user_id = coalesce(safe_user_id, device_voice_usage.last_user_id),
     updated_at = now();
@@ -459,7 +459,7 @@ begin
     safe_user_id,
     now()
   )
-  on conflict (device_hash) do nothing;
+  on conflict on constraint device_voice_usage_pkey do nothing;
 
   update public.device_voice_usage as usage
   set
