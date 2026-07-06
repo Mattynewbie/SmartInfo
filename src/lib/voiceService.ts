@@ -51,28 +51,10 @@ export async function transcribeRecording(recordingUri: string, options: Transcr
 
   throwIfAborted(options.signal);
   const endpoint = `${voiceProxyUrl.replace(/\/$/, '')}/stt`;
+  const recordingFile = await readRecordingFile(recordingUri);
+  throwIfAborted(options.signal);
 
   try {
-    if (!recordingUri.startsWith('blob:')) {
-      const recordingFile = await readRecordingMetadata(recordingUri);
-      throwIfAborted(options.signal);
-      const formData = new FormData();
-      formData.append('file', {
-        uri: recordingUri,
-        name: recordingFile.fileName,
-        type: recordingFile.mimeType,
-      } as unknown as Blob);
-
-      const response = await fetchWithTimeout(endpoint, {
-        method: 'POST',
-        body: formData,
-      }, voiceProxyTimeoutMs, options.signal);
-
-      return parseTranscriptionResponse(response, options.signal);
-    }
-
-    const recordingFile = await readRecordingFile(recordingUri);
-    throwIfAborted(options.signal);
     const response = await fetchWithTimeout(endpoint, {
       method: 'POST',
       headers: {
@@ -123,27 +105,6 @@ async function parseTranscriptionResponse(response: Response, signal?: AbortSign
   const payload = (await response.json()) as { text?: string };
   throwIfAborted(signal);
   return payload.text?.trim() || null;
-}
-
-async function readRecordingMetadata(recordingUri: string) {
-  await waitForReadableRecording(recordingUri);
-
-  const fileInfo = await FileSystem.getInfoAsync(recordingUri);
-  const byteLength = fileInfo.exists && !fileInfo.isDirectory
-    ? ((fileInfo as { size?: number }).size ?? 0)
-    : 0;
-
-  if (byteLength < minimumAudioBytes) {
-    throw new Error('Recording file was empty. Please try recording again.');
-  }
-
-  const rawFileName = getFileNameFromUri(recordingUri);
-  const extension = getSupportedExtension(rawFileName) ?? 'm4a';
-  return {
-    byteLength,
-    fileName: getSupportedExtension(rawFileName) ? rawFileName : `voice-note.${extension}`,
-    mimeType: mimeTypeByExtension[extension] ?? 'audio/mp4',
-  };
 }
 
 async function readRecordingFile(recordingUri: string) {
