@@ -25,12 +25,20 @@ expo-env.d.ts
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+expo-*.log
+*.err.log
+voice-proxy.log
+ldplayer-*.png
+.expo-go/
 
 # macOS
 .DS_Store
 *.pem
 
 # local env files
+.env
+.env.*
+!.env.example
 .env*.local
 
 # typescript

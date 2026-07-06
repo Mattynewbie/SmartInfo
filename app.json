@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "smartcompanion",
-    "slug": "smartcompanion",
+    "name": "Smart Public Information Companion",
+    "slug": "smart-public-information-companion",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -20,6 +20,16 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow Smart Public Information Companion to use your microphone for voice assistance.",
+          "enableBackgroundRecording": false
+        }
+      ],
+      "expo-secure-store"
+    ]
   }
 }
