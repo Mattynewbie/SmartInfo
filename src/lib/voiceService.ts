@@ -50,11 +50,30 @@ export async function transcribeRecording(recordingUri: string, options: Transcr
   }
 
   throwIfAborted(options.signal);
-  const recordingFile = await readRecordingFile(recordingUri);
-  throwIfAborted(options.signal);
+  const endpoint = `${voiceProxyUrl.replace(/\/$/, '')}/stt`;
 
   try {
-    const response = await fetchWithTimeout(`${voiceProxyUrl.replace(/\/$/, '')}/stt`, {
+    if (!recordingUri.startsWith('blob:')) {
+      const recordingFile = await readRecordingMetadata(recordingUri);
+      throwIfAborted(options.signal);
+      const formData = new FormData();
+      formData.append('file', {
+        uri: recordingUri,
+        name: recordingFile.fileName,
+        type: recordingFile.mimeType,
+      } as unknown as Blob);
+
+      const response = await fetchWithTimeout(endpoint, {
+        method: 'POST',
+        body: formData,
+      }, voiceProxyTimeoutMs, options.signal);
+
+      return parseTranscriptionResponse(response, options.signal);
+    }
+
+    const recordingFile = await readRecordingFile(recordingUri);
+    throwIfAborted(options.signal);
+    const response = await fetchWithTimeout(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -67,31 +86,7 @@ export async function transcribeRecording(recordingUri: string, options: Transcr
       }),
     }, voiceProxyTimeoutMs, options.signal);
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.warn('Voice proxy transcription failed:', errorText);
-
-      try {
-        const payload = JSON.parse(errorText) as {
-          error?: string;
-          details?: { detail?: { message?: string } };
-        };
-        throw new Error(payload.details?.detail?.message ?? payload.error ?? errorText);
-      } catch (error) {
-        if (error instanceof SyntaxError) {
-          throw new Error(errorText);
-        }
-        if (error instanceof Error) {
-          throw error;
-        }
-        throw new Error(errorText);
-      }
-    }
-
-    throwIfAborted(options.signal);
-    const payload = (await response.json()) as { text?: string };
-    throwIfAborted(options.signal);
-    return payload.text?.trim() || null;
+    return parseTranscriptionResponse(response, options.signal);
   } catch (error) {
     const normalized = normalizeAbortError(error);
     if (normalized instanceof Error && normalized.name === 'AbortError') {
@@ -100,6 +95,55 @@ export async function transcribeRecording(recordingUri: string, options: Transcr
     console.warn('Voice proxy unavailable:', normalized);
     throw normalized instanceof Error ? normalized : new Error('Voice proxy unavailable.');
   }
+}
+
+async function parseTranscriptionResponse(response: Response, signal?: AbortSignal) {
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.warn('Voice proxy transcription failed:', errorText);
+
+    try {
+      const payload = JSON.parse(errorText) as {
+        error?: string;
+        details?: { detail?: { message?: string } };
+      };
+      throw new Error(payload.details?.detail?.message ?? payload.error ?? errorText);
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new Error(errorText);
+      }
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error(errorText);
+    }
+  }
+
+  throwIfAborted(signal);
+  const payload = (await response.json()) as { text?: string };
+  throwIfAborted(signal);
+  return payload.text?.trim() || null;
+}
+
+async function readRecordingMetadata(recordingUri: string) {
+  await waitForReadableRecording(recordingUri);
+
+  const fileInfo = await FileSystem.getInfoAsync(recordingUri);
+  const byteLength = fileInfo.exists && !fileInfo.isDirectory
+    ? ((fileInfo as { size?: number }).size ?? 0)
+    : 0;
+
+  if (byteLength < minimumAudioBytes) {
+    throw new Error('Recording file was empty. Please try recording again.');
+  }
+
+  const rawFileName = getFileNameFromUri(recordingUri);
+  const extension = getSupportedExtension(rawFileName) ?? 'm4a';
+  return {
+    byteLength,
+    fileName: getSupportedExtension(rawFileName) ? rawFileName : `voice-note.${extension}`,
+    mimeType: mimeTypeByExtension[extension] ?? 'audio/mp4',
+  };
 }
 
 async function readRecordingFile(recordingUri: string) {

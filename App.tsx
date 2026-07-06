@@ -1,5 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
-import { AudioModule, createAudioPlayer, RecordingPresets, setAudioModeAsync, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
+import {
+  AudioModule,
+  AudioQuality,
+  createAudioPlayer,
+  IOSOutputFormat,
+  setAudioModeAsync,
+  useAudioRecorder,
+  useAudioRecorderState,
+  type RecordingOptions,
+} from 'expo-audio';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Speech from 'expo-speech';
@@ -87,6 +96,28 @@ type CancelAssistantWorkOptions = {
 const createId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const schoolCategoryId = 'school';
 const defaultCategory = defaultCategories.find((category) => category.id === schoolCategoryId) ?? defaultCategories[0];
+const cloudVoiceStartFallbackMs = 2200;
+const voiceRecordingOptions: RecordingOptions = {
+  extension: '.m4a',
+  sampleRate: 16000,
+  numberOfChannels: 1,
+  bitRate: 32000,
+  android: {
+    outputFormat: 'mpeg4',
+    audioEncoder: 'aac',
+  },
+  ios: {
+    outputFormat: IOSOutputFormat.MPEG4AAC,
+    audioQuality: AudioQuality.LOW,
+    linearPCMBitDepth: 16,
+    linearPCMIsBigEndian: false,
+    linearPCMIsFloat: false,
+  },
+  web: {
+    mimeType: 'audio/webm',
+    bitsPerSecond: 48000,
+  },
+};
 
 const createIntroMessage = (category: Category): ChatMessage => ({
   id: createId(`assistant-intro-${category.id}`),
@@ -128,7 +159,7 @@ const quickActions: Array<{
 ];
 
 export default function App() {
-  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const audioRecorder = useAudioRecorder(voiceRecordingOptions);
   const recorderState = useAudioRecorderState(audioRecorder);
   const systemColorScheme = useColorScheme();
 
@@ -1082,15 +1113,22 @@ export default function App() {
               audioUri: await synthesizeAssistantSpeech(chunk, selectedVoice, { signal: ttsAbortController.signal }),
               cancelled: false,
               error: null,
+              timedOut: false,
             };
           } catch (error) {
             if (isAbortError(error) || speechRunIdRef.current !== runId || ttsAbortController.signal.aborted) {
-              return { audioUri: null, cancelled: true, error: null };
+              return { audioUri: null, cancelled: true, error: null, timedOut: false };
             }
 
-            return { audioUri: null, cancelled: false, error };
+            return { audioUri: null, cancelled: false, error, timedOut: false };
           }
         };
+        const waitForCloudVoiceStartFallback = () =>
+          new Promise<{ audioUri: null; cancelled: false; error: null; timedOut: true }>((resolve) => {
+            setTimeout(() => {
+              resolve({ audioUri: null, cancelled: false, error: null, timedOut: true });
+            }, cloudVoiceStartFallbackMs);
+          });
         let nextAudio = chunks[0]
           ? synthesizeChunk(chunks[0])
           : null;
@@ -1100,7 +1138,16 @@ export default function App() {
             return;
           }
 
-          const audioResult = await nextAudio;
+          const audioResult = index === 0
+            ? await Promise.race([nextAudio, waitForCloudVoiceStartFallback()])
+            : await nextAudio;
+          if (audioResult.timedOut) {
+            ttsAbortController.abort();
+            if (speechRunIdRef.current === runId) {
+              speakWithDeviceVoice(spokenText, 'device-filipino', runId);
+            }
+            return;
+          }
           if (audioResult.cancelled) {
             return;
           }
@@ -1234,12 +1281,7 @@ export default function App() {
           return;
         }
 
-        pendingReplyTimerRef.current = setTimeout(() => {
-          pendingReplyTimerRef.current = null;
-          if (speechRunIdRef.current === runId && !aiAbortController.signal.aborted) {
-            playAssistantReply(reply.text, runId);
-          }
-        }, 260);
+        playAssistantReply(reply.text, runId);
       } catch (error) {
         if (isAbortError(error) || speechRunIdRef.current !== runId) {
           return;
@@ -1445,13 +1487,14 @@ export default function App() {
     voiceStartedAtRef.current = null;
     recordingRunIdRef.current = null;
     setVoiceActive(false);
-    await flushPendingDeviceVoiceUsage(true);
+    if (speechRunIdRef.current === runId) {
+      setAssistantStatus('thinking');
+    }
+    void flushPendingDeviceVoiceUsage(true);
 
     if (speechRunIdRef.current !== runId) {
       return;
     }
-
-    setAssistantStatus('thinking');
 
     if (recordedSeconds < 1.2) {
       setAssistantStatus('idle');
