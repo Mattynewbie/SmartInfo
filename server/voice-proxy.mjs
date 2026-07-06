@@ -354,7 +354,7 @@ async function answerWithGroqChat({ apiKey, model, body }) {
   const question = String(body?.question ?? '').trim();
   const category = String(body?.category ?? 'Public assistance').slice(0, 80);
   const intent = String(body?.intent ?? 'general').slice(0, 40);
-  const replyLanguage = body?.replyLanguage === 'english' ? 'english' : 'taglish';
+  const replyLanguage = 'taglish';
   const simpleMode = Boolean(body?.simpleMode);
 
   try {

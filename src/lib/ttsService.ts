@@ -23,24 +23,26 @@ export type AssistantVoiceOption = {
 const devVoiceProxyUrl =
   typeof __DEV__ !== 'undefined' && __DEV__ ? 'http://127.0.0.1:8787' : '';
 
-export const assistantVoiceOptions: AssistantVoiceOption[] = [
+const maleFilipinoAiVoiceId = 'JBFqnCBsd6RMkjVDRZzb';
+
+const allAssistantVoiceOptions: AssistantVoiceOption[] = [
   {
     id: 'filipino-elevenlabs',
-    label: 'Filipino',
-    description: 'Mas natural sa Tagalog.',
+    label: 'Male Filipino AI',
+    description: 'Default Tagalog assistant voice.',
     provider: 'elevenlabs',
     language: 'fil-PH',
-    voiceId: 'JBFqnCBsd6RMkjVDRZzb',
+    voiceId: maleFilipinoAiVoiceId,
     rate: 0.92,
     pitch: 1,
   },
   {
     id: 'taglish-elevenlabs',
-    label: 'Taglish',
-    description: 'Tagalog-English companion.',
+    label: 'Male Taglish AI',
+    description: 'Same male AI voice for Taglish replies.',
     provider: 'elevenlabs',
     language: 'fil-PH',
-    voiceId: '21m00Tcm4TlvDq8ikWAM',
+    voiceId: maleFilipinoAiVoiceId,
     rate: 0.9,
     pitch: 1.02,
   },
@@ -76,12 +78,25 @@ export const assistantVoiceOptions: AssistantVoiceOption[] = [
 
 export const defaultAssistantVoiceId: AssistantVoiceId = 'filipino-elevenlabs';
 
+export const assistantVoiceOptions = allAssistantVoiceOptions.filter(
+  (option) => option.provider === 'elevenlabs' && option.language.toLowerCase().startsWith('fil'),
+);
+
 export function getAssistantVoiceOption(id: string) {
   return (
-    assistantVoiceOptions.find((option) => option.id === id) ??
-    assistantVoiceOptions.find((option) => option.id === defaultAssistantVoiceId) ??
-    assistantVoiceOptions[0]
+    allAssistantVoiceOptions.find((option) => option.id === id) ??
+    allAssistantVoiceOptions.find((option) => option.id === defaultAssistantVoiceId) ??
+    allAssistantVoiceOptions[0]
   );
+}
+
+export function getTagalogAiVoiceOption(id: string) {
+  const selectedVoice = getAssistantVoiceOption(id);
+  const isFilipinoAiVoice =
+    selectedVoice.provider === 'elevenlabs' &&
+    selectedVoice.language.toLowerCase().startsWith('fil');
+
+  return isFilipinoAiVoice ? selectedVoice : getAssistantVoiceOption(defaultAssistantVoiceId);
 }
 
 type SynthesizeSpeechOptions = {

@@ -129,46 +129,10 @@ const stopWords = new Set([
   'your',
 ]);
 
-const filipinoSignalWords = new Set([
-  'ako',
-  'alin',
-  'ano',
-  'ba',
-  'dapat',
-  'gagawin',
-  'gawin',
-  'kailangan',
-  'kailan',
-  'kanino',
-  'ko',
-  'kong',
-  'kukuha',
-  'kumukuha',
-  'kumuha',
-  'kung',
-  'magkano',
-  'meron',
-  'muna',
-  'nasa',
-  'ng',
-  'pa',
-  'paano',
-  'papaano',
-  'para',
-  'po',
-  'pupunta',
-  'saan',
-  'sa',
-  'sino',
-  'una',
-]);
-
 const unique = (items: string[]) => Array.from(new Set(items));
 
-function detectReplyLanguage(question: string): ReplyLanguage {
-  const tokens = rawTokens(question);
-  const filipinoHits = tokens.filter((token) => filipinoSignalWords.has(token)).length;
-  return filipinoHits >= 1 ? 'taglish' : 'english';
+function detectReplyLanguage(_question: string): ReplyLanguage {
+  return 'taglish';
 }
 
 function scoreMatch(queryTokens: string[], searchable: string): MatchScore {

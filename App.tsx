@@ -48,6 +48,7 @@ import {
   assistantVoiceOptions,
   defaultAssistantVoiceId,
   getAssistantVoiceOption,
+  getTagalogAiVoiceOption,
   synthesizeAssistantSpeech,
   type AssistantVoiceId,
 } from './src/lib/ttsService';
@@ -344,7 +345,11 @@ export default function App() {
       ]);
 
       deviceIdentityRef.current = nextDeviceIdentity;
-      setSelectedVoiceId(getAssistantVoiceOption(storedVoiceId ?? defaultAssistantVoiceId).id);
+      const nextSelectedVoiceId = getTagalogAiVoiceOption(storedVoiceId ?? defaultAssistantVoiceId).id;
+      setSelectedVoiceId(nextSelectedVoiceId);
+      if (storedVoiceId !== nextSelectedVoiceId) {
+        await saveSelectedVoiceId(nextSelectedVoiceId);
+      }
       setGuestUserId(nextGuestUserId);
       setConversationId(`conversation-${nextGuestUserId}`);
 
@@ -985,8 +990,9 @@ export default function App() {
   }, [recentQuestions, userProfile]);
 
   const handleSelectAssistantVoice = useCallback((voiceId: AssistantVoiceId) => {
-    setSelectedVoiceId(voiceId);
-    saveSelectedVoiceId(voiceId);
+    const nextSelectedVoiceId = getTagalogAiVoiceOption(voiceId).id;
+    setSelectedVoiceId(nextSelectedVoiceId);
+    saveSelectedVoiceId(nextSelectedVoiceId);
     Haptics.selectionAsync();
   }, []);
 
@@ -1089,7 +1095,7 @@ export default function App() {
 
   const speakAssistantText = useCallback(
     async (replyText: string, runId = speechRunIdRef.current) => {
-      const selectedVoice = getAssistantVoiceOption(selectedVoiceId);
+      const selectedVoice = getTagalogAiVoiceOption(selectedVoiceId);
       const spokenText = cleanSpokenReplyText(replyText);
 
       stopAssistantPlayback();
@@ -2295,7 +2301,7 @@ function VoiceStyleSelector({
       <View style={styles.voiceSelectorHeader}>
         <View>
           <Text style={styles.voiceSelectorTitle}>Assistant Voice</Text>
-          <Text style={styles.voiceSelectorSubtitle}>Piliin ang mas malinaw sa Tagalog o English.</Text>
+          <Text style={styles.voiceSelectorSubtitle}>Male AI voice para sa Tagalog at Taglish replies.</Text>
         </View>
         <Ionicons name="volume-high-outline" size={20} color="#0F766E" />
       </View>
