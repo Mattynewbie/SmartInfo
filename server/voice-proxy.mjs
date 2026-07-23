@@ -75,6 +75,14 @@ app.use(cors());
 app.use(express.json({ limit: '25mb' }));
 
 app.get('/health', (_request, response) => {
+  const hasSupabaseUrl = Boolean(
+    process.env.SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL,
+  );
+  const hasSupabaseKey = Boolean(
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.SUPABASE_ANON_KEY ||
+      process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
+  );
   response.json({
     ok: true,
     service: 'smartinfo-voice-proxy',
@@ -82,6 +90,8 @@ app.get('/health', (_request, response) => {
     chatModel: getGroqChatModel(),
     hasGroqKey: Boolean(getGroqApiKey()),
     hasElevenLabsKey: Boolean(getElevenLabsApiKey()),
+    hasCrawlRoutes: true,
+    hasSupabaseEnv: hasSupabaseUrl && hasSupabaseKey,
   });
 });
 

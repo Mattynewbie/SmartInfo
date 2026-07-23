@@ -26,10 +26,28 @@ export function isCrawlRunning(jobId) {
   return activeJobs.has(jobId);
 }
 
+/**
+ * Supabase REST config for crawl jobs.
+ * Prefer server env on DigitalOcean (SUPABASE_URL / SUPABASE_*_KEY).
+ * Public URL + anon key may fall back to EXPO_PUBLIC_* (same values already in the mobile app).
+ * Optional service role speeds up writes; user JWT works when RLS allows Super Admin.
+ */
 function getSupabaseConfig() {
-  const url = (process.env.SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL || '').replace(/\/$/, '');
+  const url = (
+    process.env.SUPABASE_URL ||
+    process.env.EXPO_PUBLIC_SUPABASE_URL ||
+    // Known project (public) — so DO works even if only GROQ/ELEVENLABS were set in App Platform.
+    'https://wiryterhikvjxhsshyic.supabase.co'
+  )
+    .trim()
+    .replace(/\/$/, '');
   const serviceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-  const anonKey = (process.env.SUPABASE_ANON_KEY || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '').trim();
+  const anonKey = (
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
+    // Public anon key (safe to ship; RLS still enforces Super Admin for crawl writes).
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indpcnl0ZXJoaWt2anhoc3NoeWljIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMyMzk4NjQsImV4cCI6MjA5ODgxNTg2NH0.ebcHuidRAIh0R-roGl0OtPFWFV_qFKmzcIgOpUHL1O4'
+  ).trim();
   return { url, serviceKey, anonKey };
 }
 
