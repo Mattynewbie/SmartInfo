@@ -2,13 +2,23 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import express from 'express';
 import multer from 'multer';
+import {
+  createCrawlJob,
+  getWriteToken,
+  isCrawlRunning,
+  loadSourceById,
+  requestStopCrawl,
+  requireSuperAdminFromAuthHeader,
+  runWebsiteCrawl,
+} from './website-crawler.mjs';
 
 dotenv.config({ path: '.env.local' });
 dotenv.config();
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
-const port = Number(process.env.VOICE_PROXY_PORT ?? 8787);
+// DigitalOcean App Platform injects PORT; local dev uses 8787.
+const port = Number(process.env.PORT || process.env.VOICE_PROXY_PORT || 8787);
 const minimumAudioBytes = 128;
 const mimeTypeByExtension = {
   '3gp': 'audio/3gpp',
@@ -691,6 +701,7 @@ async function answerWithGroqChat({ apiKey, model, body }) {
           isEditorMode && groundedContent
             ? cleanKnowledgeEditorAnswer(answer)
             : cleanCompanionAnswer(answer),
+        groundingMode: isEditorMode && groundedContent ? 'editor-v2' : undefined,
         provider: 'groq',
         model,
       },
@@ -778,20 +789,27 @@ function buildKnowledgeEditorSystemPrompt({ schoolName, replyLanguage, simpleMod
   const schoolLine = schoolName ? `The information belongs to: ${schoolName}.` : '';
 
   return [
-    'You are an editor for a school information system. Your ONLY job is to reorganize and polish the SOURCE INFORMATION provided by the school administrator into a clean, professional, easy-to-read answer.',
-    'You are an EDITOR, not an author. Treat the SOURCE INFORMATION as immutable facts.',
+    'You are the school information AI assistant. Answer the student using ONLY the SOURCE INFORMATION (admin-approved facts).',
+    'You rewrite and explain like a helpful AI — not a raw database dump — but you NEVER invent facts outside the source.',
     schoolLine,
     languageInstruction,
     simplicity,
-    'YOU MAY: fix grammar and spelling, improve sentence structure, organize the content, add clear section headings, turn rough notes into paragraphs, numbered steps, or bullet lists, expand an abbreviation ONLY if its meaning is already shown in the source, and improve overall readability.',
-    'YOU MUST NEVER: invent new requirements, add any detail not in the source, guess missing information, replace or change any fact, or use outside/general knowledge.',
-    'NEVER use hedging words like "usually", "normally", "typically", "generally", or "most schools". State only what the source says.',
-    'If the source is incomplete, simply present what exists. Do not fill in gaps.',
+    'CRITICAL — ANSWER THE QUESTION:',
+    '- Read the student question carefully and answer THAT specific question.',
+    '- Use ONLY the SOURCE INFORMATION provided. Do not add, infer, or supplement from outside knowledge.',
+    '- Focus on the parts of the source that directly match the question.',
+    '- If the source does not contain enough detail to fully answer, say so honestly — do not invent.',
+    'YOU MAY: fix grammar, rephrase for clarity, organize into short title + intro + bullets/steps.',
+    'YOU MUST NEVER: invent requirements, offices, fees, or policies not in the source; use general web knowledge; add information from other topics not in the source; or dump the whole source verbatim.',
+    'NEVER use hedging like "usually", "typically", "most schools", "generally", "normally". State only what the source says.',
     'Preserve every fact, number, percentage, office name, and location exactly as written in the source.',
-    'Structure the answer when the content allows, in this order: a short title, a one-line introduction, a step-by-step procedure, a requirements list, notes, and the office/location or contact. Omit any section that has no source information.',
-    'You may use simple markdown: **bold** for the title and section labels, numbered lists for steps, and "- " for bullet points.',
-    'Do not mention that you are an AI, an editor, or that you reorganized text. Just present the polished official information.',
-    'Keep it concise and suitable for a mobile chat bubble.',
+    'FORMAT RULES FOR MOBILE CHAT:',
+    '- Short title line (Title Case), then a blank line, then the answer.',
+    '- Section labels on their own lines (Requirements, Steps, Notes).',
+    '- Use "- " for bullets and "1. 2. 3." for steps. Blank lines between sections.',
+    '- NEVER use markdown **bold** or *italics* or code fences.',
+    'Do not mention that you are an AI or that you reorganized text. Write a natural, professional answer.',
+    'Keep it concise (mobile chat). Prefer 1 short intro + bullets over long paragraphs.',
   ]
     .filter(Boolean)
     .join('\n');
@@ -800,14 +818,21 @@ function buildKnowledgeEditorSystemPrompt({ schoolName, replyLanguage, simpleMod
 /** Editor-mode user message: the question plus the exact stored source text. */
 function buildKnowledgeEditorUserPrompt({ question, groundedContent }) {
   return [
-    question ? `The student asked: "${question}"` : 'The student asked about the topic below.',
+    question
+      ? `Student question (answer THIS, using only the source below):\n"${question}"`
+      : 'The student asked about the topic below.',
     '',
-    'SOURCE INFORMATION (from the school administrator \u2014 reorganize and polish ONLY this, add nothing):',
+    'SOURCE INFORMATION (the ONLY facts you may use — do not add anything outside this):',
     '"""',
     groundedContent,
     '"""',
     '',
-    'Rewrite the SOURCE INFORMATION into a clear, professional, well-structured answer following your editor rules. Do not add any fact that is not in the source above.',
+    'Rules:',
+    '- Answer ONLY the student question using ONLY the source above.',
+    '- Do NOT include information from other topics not present in the source.',
+    '- Do NOT add, infer, or supplement from outside knowledge.',
+    '- Rewrite for clarity and natural flow. Preserve every fact, number, name, and location exactly.',
+    '- If the source does not answer the question, say so honestly.',
   ].join('\n');
 }
 
@@ -819,6 +844,11 @@ function cleanKnowledgeEditorAnswer(answer) {
   return answer
     .replace(/^assistant:\s*/i, '')
     .replace(/[\p{Extended_Pictographic}\uFE0F]/gu, '')
+    // Strip markdown bold/italic so chat never shows raw ****
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/\*([^*\n]+)\*/g, '$1')
+    .replace(/\*{2,}/g, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -914,6 +944,105 @@ async function synthesizeWithElevenLabs(body) {
     };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Website Knowledge Import — Super Admin only (RBAC enforced here + RLS)
+// ---------------------------------------------------------------------------
+async function withSuperAdmin(request, response, handler) {
+  try {
+    const auth = await requireSuperAdminFromAuthHeader(request.headers.authorization);
+    await handler(auth);
+  } catch (error) {
+    const status = error?.status || 500;
+    response.status(status).json({
+      error: error instanceof Error ? error.message : 'Request failed.',
+    });
+  }
+}
+
+app.post('/crawl/start', async (request, response) => {
+  await withSuperAdmin(request, response, async (auth) => {
+    const sourceId = String(request.body?.sourceId || '').trim();
+    if (!sourceId) {
+      response.status(400).json({ error: 'sourceId is required.' });
+      return;
+    }
+    const writeToken = getWriteToken(auth.accessToken);
+    const source = await loadSourceById(sourceId, writeToken);
+    if (!source) {
+      response.status(404).json({ error: 'Website source not found.' });
+      return;
+    }
+    if (source.status === 'crawling') {
+      response.status(409).json({ error: 'A crawl is already running for this source.' });
+      return;
+    }
+    const job = await createCrawlJob(sourceId, auth.userId, writeToken);
+    if (!job?.id) {
+      response.status(500).json({ error: 'Could not create crawl job.' });
+      return;
+    }
+    // Fire-and-forget; client polls job status via Supabase.
+    void runWebsiteCrawl({
+      source,
+      jobId: job.id,
+      writeToken,
+      createdBy: auth.userId,
+    });
+    response.json({ ok: true, jobId: job.id, sourceId });
+  });
+});
+
+app.post('/crawl/stop', async (request, response) => {
+  await withSuperAdmin(request, response, async () => {
+    const jobId = String(request.body?.jobId || '').trim();
+    if (!jobId) {
+      response.status(400).json({ error: 'jobId is required.' });
+      return;
+    }
+    const stopped = requestStopCrawl(jobId);
+    response.json({
+      ok: true,
+      stopped,
+      running: isCrawlRunning(jobId),
+      message: stopped
+        ? 'Stop signal sent. Crawl will halt after the current page.'
+        : 'Job was not running on this server instance (it may already be finished).',
+    });
+  });
+});
+
+app.get('/crawl/status/:jobId', async (request, response) => {
+  await withSuperAdmin(request, response, async (auth) => {
+    const jobId = String(request.params.jobId || '').trim();
+    const writeToken = getWriteToken(auth.accessToken);
+    const url = (process.env.SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL || '').replace(/\/$/, '');
+    const key =
+      process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.SUPABASE_ANON_KEY ||
+      process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    const res = await fetch(
+      `${url}/rest/v1/website_crawl_jobs?id=eq.${encodeURIComponent(jobId)}&select=*&limit=1`,
+      {
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${writeToken}`,
+        },
+      },
+    );
+    const rows = await res.json();
+    const row = Array.isArray(rows) ? rows[0] : null;
+    if (!row) {
+      response.status(404).json({ error: 'Job not found.' });
+      return;
+    }
+    response.json({
+      ok: true,
+      job: row,
+      runningOnThisServer: isCrawlRunning(jobId),
+    });
+  });
+});
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`SmartInfo voice proxy running at http://127.0.0.1:${port}`);
