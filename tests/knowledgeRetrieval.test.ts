@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  formatKnowledgeReply,
   isBroadOverviewQuestion,
   selectBestKnowledgeArticle,
   selectRelevantKnowledgeContext,
+  stripConversationalLeadIn,
   type KnowledgeArticleLite,
 } from '../src/lib/companionEngine';
 import { buildKnowledgeSearchQuery } from '../src/lib/knowledgeQuery';
@@ -213,4 +215,26 @@ test('scholarship article is selected for broad scholarship question', () => {
   assert.ok(result);
   assert.match(result!.article.id, /scholarship-programs/);
   assert.ok(result!.score >= 2.5);
+});
+
+test('strips conversational double-intro after official header', () => {
+  const cleaned = stripConversationalLeadIn(
+    "Sure, here is an overview of the scholarship programs and how to obtain them.\n\nF. Cayco Memorial Scholarship\n- 100% tuition",
+  );
+  assert.doesNotMatch(cleaned, /^sure/i);
+  assert.doesNotMatch(cleaned, /here is an overview/i);
+  assert.match(cleaned, /F\.\s*Cayco/i);
+
+  const formatted = formatKnowledgeReply(
+    "Sure, here is an overview of the scholarship programs and how to obtain them.\n\nThe following scholarship programs are currently available:\n\nF. Cayco Memorial Scholarship",
+    'english',
+  );
+  assert.match(formatted, /^According to the school's official information:/);
+  assert.equal(
+    (formatted.match(/According to the school's official information:/gi) || []).length,
+    1,
+  );
+  assert.doesNotMatch(formatted, /Sure,/i);
+  assert.doesNotMatch(formatted, /here is an overview/i);
+  assert.match(formatted, /The following scholarship programs are currently available/);
 });

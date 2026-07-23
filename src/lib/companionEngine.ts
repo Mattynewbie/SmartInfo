@@ -861,9 +861,8 @@ async function editKnowledgeWithProxy(
       return null;
     }
 
-    // Guarantee the official-source header is present regardless of the model.
-    const header = groundingHeader(language);
-    let text = answer.startsWith(header) ? answer : `${header}\n\n${answer}`;
+    // One official header + body only — strip "Sure, here is…" style openers.
+    const text = formatKnowledgeReply(answer, language);
     // Reject hollow editor output (header with no body).
     if (!hasSubstantiveKnowledgeReply(text, language)) {
       return null;
@@ -1160,6 +1159,113 @@ function groundingHeader(language: ReplyLanguage): string {
     : language === 'taglish'
       ? 'Base sa official info ng school:'
       : "According to the school's official information:";
+}
+
+/** Known official-context headers (EN / TL) the model may emit. */
+const OFFICIAL_CONTEXT_HEADERS = [
+  /^according to the school'?s official information:\s*/i,
+  /^according to the available information:\s*/i,
+  /^according to the stored knowledge:\s*/i,
+  /^based on the official records:\s*/i,
+  /^based on the stored knowledge:\s*/i,
+  /^based on the school'?s official information:\s*/i,
+  /^base sa opisyal na impormasyon ng school:\s*/i,
+  /^base sa official info ng school:\s*/i,
+];
+
+/**
+ * Remove ChatGPT-style conversational openers so the answer reads like
+ * documentation under a single official-info header.
+ */
+export function stripConversationalLeadIn(text: string): string {
+  let body = String(text || '').trim();
+  if (!body) return '';
+
+  // Drop any duplicate official headers the model may have prepended.
+  let strippedHeader = true;
+  while (strippedHeader) {
+    strippedHeader = false;
+    for (const re of OFFICIAL_CONTEXT_HEADERS) {
+      if (re.test(body)) {
+        body = body.replace(re, '').trim();
+        strippedHeader = true;
+      }
+    }
+  }
+
+  // Remove leading filler paragraphs / first sentence openers.
+  const fillerLine =
+    /^(sure|certainly|of course|absolutely|okay|ok|alright|yes)[,!.]?\s+/i;
+  const fillerPhrases = [
+    /^(sure|certainly|of course|absolutely)[,!.]?\s+(here('s| is)|i can|let me)\b[^\n]*/i,
+    /^here('s| is)\s+(an?\s+)?(overview|summary|list|information|details?)\b[^\n]*/i,
+    /^i can help\b[^\n]*/i,
+    /^let me (help|explain|share|provide)\b[^\n]*/i,
+    /^i('ll| will) (help|explain|share|provide)\b[^\n]*/i,
+    /^(below is|the following is)\s+(an?\s+)?(overview|summary|list)\b[^\n]*/i,
+    /^sige[,!.]?\s+(ito|here|heto)\b[^\n]*/i,
+    /^oo[,!.]?\s+(ito|here)\b[^\n]*/i,
+  ];
+
+  // Strip up to 2 leading filler lines/paragraphs.
+  for (let pass = 0; pass < 2; pass++) {
+    const before = body;
+    // First paragraph only
+    const parts = body.split(/\n\s*\n/);
+    const first = (parts[0] || '').trim();
+    let dropFirst = false;
+    if (fillerLine.test(first) || fillerPhrases.some((re) => re.test(first))) {
+      dropFirst = true;
+    } else if (
+      first.length < 140 &&
+      /^(sure|certainly|of course|here('s| is)|i can)\b/i.test(first) &&
+      /overview|summary|programs?|scholarships?|help/i.test(first)
+    ) {
+      dropFirst = true;
+    }
+    if (dropFirst && parts.length > 1) {
+      body = parts.slice(1).join('\n\n').trim();
+    } else if (dropFirst && parts.length === 1) {
+      // Single paragraph: try cutting the first sentence only
+      const cut = first.replace(
+        /^(sure|certainly|of course|absolutely)[,!.]?\s+[^.!?\n]+[.!?]\s*/i,
+        '',
+      );
+      const cut2 = cut.replace(
+        /^here('s| is)\s+(an?\s+)?(overview|summary|list)[^.!?\n]*[.!?]\s*/i,
+        '',
+      );
+      body = (cut2 || cut).trim();
+    }
+    // Also strip a single leading filler line before the rest of a multi-line block
+    body = body
+      .replace(
+        /^(sure|certainly|of course|absolutely)[,!.]?\s+(here('s| is)|i can|let me)[^\n]*\n+/i,
+        '',
+      )
+      .replace(/^here('s| is)\s+(an?\s+)?(overview|summary|list)[^\n]*\n+/i, '')
+      .trim();
+    if (body === before) break;
+  }
+
+  return body.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/**
+ * One professional header + clean body. Never double-intro.
+ */
+export function formatKnowledgeReply(answerBody: string, language: ReplyLanguage): string {
+  const header = groundingHeader(language);
+  let body = stripConversationalLeadIn(answerBody);
+  // If strip left nothing useful, keep original minus header only
+  if (body.length < 20) {
+    body = String(answerBody || '')
+      .replace(new RegExp(`^${header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`, 'i'), '')
+      .trim();
+    body = stripConversationalLeadIn(body);
+  }
+  if (!body) return header;
+  return `${header}\n\n${body}`;
 }
 
 /**
@@ -2028,17 +2134,17 @@ function buildRawKnowledgeReply(
     .replace(/^About\s*[-–:]\s*/i, '')
     .trim();
 
-  const parts = [groundingHeader(language)];
+  const contentParts: string[] = [];
   if (title) {
-    parts.push(title);
+    contentParts.push(title);
   }
   if (body) {
-    parts.push(body);
+    contentParts.push(body);
   }
 
   return {
     source: 'knowledge_base',
-    text: parts.join('\n\n').trim(),
+    text: formatKnowledgeReply(contentParts.join('\n\n'), language),
   };
 }
 

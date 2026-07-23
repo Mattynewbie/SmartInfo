@@ -838,11 +838,14 @@ function buildKnowledgeEditorSystemPrompt({ schoolName, replyLanguage, simpleMod
     'YOU MUST NEVER: invent requirements, offices, fees, or policies not in the source; use general web knowledge; or add topics not in the source.',
     'NEVER use hedging like "usually", "typically", "most schools", "generally", "normally". State only what the source says.',
     'Preserve every fact, number, percentage, office name, and location exactly as written in the source.',
-    'FORMAT RULES FOR MOBILE CHAT:',
-    '- Short intro line, then blank line, then the answer.',
+    'FORMAT RULES FOR MOBILE CHAT (professional knowledge-base style):',
+    '- Do NOT write conversational openers. Forbidden starts: "Sure,", "Certainly,", "Of course,", "Absolutely,", "Okay,", "Here is...", "Here\'s...", "I can help...", "Let me explain...".',
+    '- Do NOT write a second introduction. The app already adds an official-info header. Start directly with the answer body.',
+    '- Start with the actual content (e.g. "The following scholarship programs are currently available:" or the first program heading).',
     '- Section labels on their own lines (Eligibility, Benefits, Requirements, Important).',
     '- Use "- " for bullets and "1. 2. 3." for numbered programs. Blank lines between sections.',
     '- NEVER use markdown **bold** or *italics* or code fences.',
+    '- Write like an official student handbook / FAQ, not like ChatGPT chat.',
     'Do not mention that you are an AI or that you reorganized text.',
     broadOverview
       ? 'Completeness beats extreme brevity: cover every distinct program in the source, even if the answer is longer.'
@@ -866,6 +869,8 @@ function buildKnowledgeEditorUserPrompt({ question, groundedContent, broadOvervi
     '',
     'Rules:',
     '- Answer ONLY the student question using ONLY the source above.',
+    '- Start immediately with the answer content. No "Sure", "Certainly", "Here is an overview", or similar fillers.',
+    '- Do not add an official-info header; the app adds that separately.',
     broadOverview
       ? '- This is a broad overview: include every distinct program/section in the source that relates to the question. Do not stop after the first two.'
       : '- Focus on the named program or detail; include its complete related eligibility, benefits, and requirements from the source.',
@@ -876,11 +881,10 @@ function buildKnowledgeEditorUserPrompt({ question, groundedContent, broadOvervi
 }
 
 /**
- * Editor-mode cleaner. Unlike cleanCompanionAnswer, it PRESERVES markdown
- * headings/bold, since the professional layout depends on them.
+ * Editor-mode cleaner. Strips conversational fillers and raw markdown noise.
  */
 function cleanKnowledgeEditorAnswer(answer) {
-  return answer
+  let text = String(answer || '')
     .replace(/^assistant:\s*/i, '')
     .replace(/[\p{Extended_Pictographic}\uFE0F]/gu, '')
     // Strip markdown bold/italic so chat never shows raw ****
@@ -888,8 +892,42 @@ function cleanKnowledgeEditorAnswer(answer) {
     .replace(/__([^_]+)__/g, '$1')
     .replace(/\*([^*\n]+)\*/g, '$1')
     .replace(/\*{2,}/g, '')
-    .replace(/\n{3,}/g, '\n\n')
     .trim();
+
+  // Drop model-emitted official headers (app adds one).
+  text = text
+    .replace(/^according to the school'?s official information:\s*/i, '')
+    .replace(/^according to the available information:\s*/i, '')
+    .replace(/^based on the (official records|stored knowledge|school'?s official information):\s*/i, '')
+    .replace(/^base sa (opisyal na impormasyon|official info) ng school:\s*/i, '')
+    .trim();
+
+  // Drop conversational openers (first paragraph / first lines).
+  for (let i = 0; i < 2; i++) {
+    const before = text;
+    text = text
+      .replace(
+        /^(sure|certainly|of course|absolutely|okay|ok|alright)[,!.]?\s+(here('s| is)|i can|let me)[^\n]*\n*/i,
+        '',
+      )
+      .replace(/^here('s| is)\s+(an?\s+)?(overview|summary|list|information|details?)[^\n]*\n*/i, '')
+      .replace(/^i can help[^\n]*\n*/i, '')
+      .replace(/^let me (help|explain|share|provide)[^\n]*\n*/i, '')
+      .trim();
+    // Whole first paragraph is a short filler
+    const paras = text.split(/\n\s*\n/);
+    if (
+      paras.length > 1 &&
+      paras[0].length < 140 &&
+      /^(sure|certainly|of course|here('s| is)|i can)\b/i.test(paras[0]) &&
+      /overview|summary|programs?|scholarships?|help|obtain/i.test(paras[0])
+    ) {
+      text = paras.slice(1).join('\n\n').trim();
+    }
+    if (text === before) break;
+  }
+
+  return text.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 app.post('/tts', async (request, response) => {
