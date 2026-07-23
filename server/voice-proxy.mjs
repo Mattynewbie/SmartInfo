@@ -622,12 +622,15 @@ async function answerWithGroqChat({ apiKey, model, body }) {
   const forceAnswerOutsideCategory = Boolean(body?.forceAnswerOutsideCategory);
   // Editor mode: rewrite ONLY the supplied stored content, never add facts.
   const isEditorMode = String(body?.mode ?? '') === 'editor';
-  const groundedContent = String(body?.groundedContent ?? '').trim().slice(0, 4000);
+  const broadOverview = Boolean(body?.broadOverview);
+  // Broad multi-program answers need a large grounded window (was 4000 — too small).
+  const groundedLimit = isEditorMode ? (broadOverview ? 14000 : 6000) : 4000;
+  const groundedContent = String(body?.groundedContent ?? '').trim().slice(0, groundedLimit);
 
   try {
     const systemContent =
       isEditorMode && groundedContent
-        ? buildKnowledgeEditorSystemPrompt({ schoolName, replyLanguage, simpleMode })
+        ? buildKnowledgeEditorSystemPrompt({ schoolName, replyLanguage, simpleMode, broadOverview })
         : buildCompanionSystemPrompt({
             category,
             categoryScope,
@@ -640,8 +643,12 @@ async function answerWithGroqChat({ apiKey, model, body }) {
 
     const userContent =
       isEditorMode && groundedContent
-        ? buildKnowledgeEditorUserPrompt({ question, groundedContent })
+        ? buildKnowledgeEditorUserPrompt({ question, groundedContent, broadOverview })
         : question;
+
+    // Broad scholarship/program overviews need high output budget (was 600 — truncated lists).
+    const editorMaxTokens = broadOverview ? 3200 : 1600;
+    const chatMaxTokens = simpleMode ? 500 : 900;
 
     const requestBody = {
       model,
@@ -658,7 +665,7 @@ async function answerWithGroqChat({ apiKey, model, body }) {
       // Editor mode stays low-temperature so the model reorganizes rather than
       // invents. Give it a bit more room for headings/steps than a chat reply.
       temperature: isEditorMode ? 0.15 : 0.35,
-      max_completion_tokens: isEditorMode ? 600 : simpleMode ? 300 : 420,
+      max_completion_tokens: isEditorMode ? editorMaxTokens : chatMaxTokens,
       top_p: 0.9,
       stream: false,
     };
@@ -786,7 +793,7 @@ function cleanCompanionAnswer(answer) {
  * knowledge: it reorganizes and polishes the admin's exact text into a clean,
  * handbook-style answer, but must NEVER add, guess, or replace any fact.
  */
-function buildKnowledgeEditorSystemPrompt({ schoolName, replyLanguage, simpleMode }) {
+function buildKnowledgeEditorSystemPrompt({ schoolName, replyLanguage, simpleMode, broadOverview }) {
   const languageInstruction =
     replyLanguage === 'english'
       ? 'Write the response in clear, professional English.'
@@ -798,8 +805,26 @@ function buildKnowledgeEditorSystemPrompt({ schoolName, replyLanguage, simpleMod
     : 'Use clear, formal, student-friendly wording, like an official university FAQ or student handbook.';
   const schoolLine = schoolName ? `The information belongs to: ${schoolName}.` : '';
 
+  const broadRules = broadOverview
+    ? [
+        'BROAD OVERVIEW MODE (list / explain all programs, scholarships, discounts, courses, services, requirements, or policies):',
+        '- Review ALL sections in the SOURCE before answering. Do not stop after the first matching section.',
+        '- Include EVERY distinct relevant program, option, or section found in the source.',
+        '- Organize with numbered headings for each program, then short bullets for eligibility, benefits, GWA/percentages, and requirements.',
+        '- A concise overview of every program is required — never give full detail for only the first two programs.',
+        '- Preserve exact percentages, GWA ranges, eligibility rules, fee coverage (tuition only vs tuition + miscellaneous), and disclaimers.',
+        '- Include important notes such as "subject to change without prior notice" when present in the source.',
+        '- Never claim information is unavailable when it appears later in the provided source.',
+      ]
+    : [
+        'SPECIFIC QUESTION MODE:',
+        '- Focus on the named program or detail the student asked about.',
+        '- Include that program’s full related details (eligibility, benefits, requirements, notes) from the source.',
+        '- Do not omit requirements that appear next to the program in the source.',
+      ];
+
   return [
-    'You are the school information AI assistant. Answer the student using ONLY the SOURCE INFORMATION (admin-approved facts).',
+    'You answer using the approved SmartInfo knowledge base (SOURCE INFORMATION only).',
     'You rewrite and explain like a helpful AI — not a raw database dump — but you NEVER invent facts outside the source.',
     schoolLine,
     languageInstruction,
@@ -807,26 +832,28 @@ function buildKnowledgeEditorSystemPrompt({ schoolName, replyLanguage, simpleMod
     'CRITICAL — ANSWER THE QUESTION:',
     '- Read the student question carefully and answer THAT specific question.',
     '- Use ONLY the SOURCE INFORMATION provided. Do not add, infer, or supplement from outside knowledge.',
-    '- Focus on the parts of the source that directly match the question.',
     '- If the source does not contain enough detail to fully answer, say so honestly — do not invent.',
-    'YOU MAY: fix grammar, rephrase for clarity, organize into short title + intro + bullets/steps.',
-    'YOU MUST NEVER: invent requirements, offices, fees, or policies not in the source; use general web knowledge; add information from other topics not in the source; or dump the whole source verbatim.',
+    ...broadRules,
+    'YOU MAY: fix grammar, rephrase for clarity, organize into headings + bullets/steps.',
+    'YOU MUST NEVER: invent requirements, offices, fees, or policies not in the source; use general web knowledge; or add topics not in the source.',
     'NEVER use hedging like "usually", "typically", "most schools", "generally", "normally". State only what the source says.',
     'Preserve every fact, number, percentage, office name, and location exactly as written in the source.',
     'FORMAT RULES FOR MOBILE CHAT:',
-    '- Short title line (Title Case), then a blank line, then the answer.',
-    '- Section labels on their own lines (Requirements, Steps, Notes).',
-    '- Use "- " for bullets and "1. 2. 3." for steps. Blank lines between sections.',
+    '- Short intro line, then blank line, then the answer.',
+    '- Section labels on their own lines (Eligibility, Benefits, Requirements, Important).',
+    '- Use "- " for bullets and "1. 2. 3." for numbered programs. Blank lines between sections.',
     '- NEVER use markdown **bold** or *italics* or code fences.',
-    'Do not mention that you are an AI or that you reorganized text. Write a natural, professional answer.',
-    'Keep it concise (mobile chat). Prefer 1 short intro + bullets over long paragraphs.',
+    'Do not mention that you are an AI or that you reorganized text.',
+    broadOverview
+      ? 'Completeness beats extreme brevity: cover every distinct program in the source, even if the answer is longer.'
+      : 'Keep focused on the named item, but include all of its related details from the source.',
   ]
     .filter(Boolean)
     .join('\n');
 }
 
 /** Editor-mode user message: the question plus the exact stored source text. */
-function buildKnowledgeEditorUserPrompt({ question, groundedContent }) {
+function buildKnowledgeEditorUserPrompt({ question, groundedContent, broadOverview }) {
   return [
     question
       ? `Student question (answer THIS, using only the source below):\n"${question}"`
@@ -839,9 +866,11 @@ function buildKnowledgeEditorUserPrompt({ question, groundedContent }) {
     '',
     'Rules:',
     '- Answer ONLY the student question using ONLY the source above.',
-    '- Do NOT include information from other topics not present in the source.',
+    broadOverview
+      ? '- This is a broad overview: include every distinct program/section in the source that relates to the question. Do not stop after the first two.'
+      : '- Focus on the named program or detail; include its complete related eligibility, benefits, and requirements from the source.',
     '- Do NOT add, infer, or supplement from outside knowledge.',
-    '- Rewrite for clarity and natural flow. Preserve every fact, number, name, and location exactly.',
+    '- Rewrite for clarity and natural flow. Preserve every fact, number, percentage, name, and location exactly.',
     '- If the source does not answer the question, say so honestly.',
   ].join('\n');
 }
